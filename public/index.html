@@ -30,6 +30,10 @@ nav .on{color:var(--acc);font-weight:700}
 .row>*{min-width:0}
 .mute{color:var(--mute);font-size:.9rem}
 .err{color:#fb7185}
+.cov{position:relative;display:grid;place-items:center;font-size:26px;background:var(--line);border-radius:8px;overflow:hidden;flex:none}
+.cov img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.cdrow{display:flex;gap:12px;align-items:center}
+.cdrow>div:last-child{min-width:0}
 .link{background:none;border:0;color:var(--acc);padding:10px 0;width:100%}
 </style>
 </head>
@@ -48,16 +52,17 @@ const api = async (p, o = {}) => {
 };
 const fmt = s => s == null ? '' : Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
 const parseT = t => { t = t.trim(); const m = /^(\d+):(\d{1,2})$/.exec(t); return m ? +m[1] * 60 + +m[2] : /^\d+$/.test(t) ? +t : null; };
-const blank = () => ({ id: null, name: '', artist: '', year: '', rating: 0, barcode: '', tracks: [] });
+const blank = () => ({ id: null, name: '', artist: '', year: '', rating: 0, barcode: '', rgid: '', tracks: [] });
 let me = null, cds = [], view = 'list', form = blank(), search = '', mode = 'login', authErr = '';
 
 const stars = n => '<span class="stars">' + [...Array(10)].map((_, i) => `<button type="button" data-star="${i + 1}" class="${i < n ? 'on' : ''}">★</button>`).join('') + '</span>';
 let group = false;
 try { group = localStorage.getItem('grp') === '1'; } catch (e) {}
+const cov = (id, size = 64) => `<div class="cov" style="width:${size}px;height:${size}px">💿${id ? `<img alt="" loading="lazy" src="https://coverartarchive.org/release-group/${esc(id)}/front-250" onerror="this.remove()">` : ''}</div>`;
 const card = (c, q = '', showArtist = true) => {
   const th = q && !(c.name + ' ' + c.artist).toLowerCase().includes(q) ? c.tracks.find(t => t.name.toLowerCase().includes(q)) : null;
   const sub = (showArtist ? esc(c.artist) : '') + (c.year ? (showArtist ? ' · ' : '') + c.year : '');
-  return `<div class="card" data-edit="${c.id}"><b>${esc(c.name)}</b>${sub ? `<div class="mute">${sub}</div>` : ''}<div>★ ${c.rating}/10${c.tracks.length ? ` <span class="mute">· ${c.tracks.length} tracks</span>` : ''}</div>${th ? `<div class="mute">♪ ${esc(th.name)}</div>` : ''}</div>`;
+  return `<div class="card cdrow" data-edit="${c.id}">${cov(c.rgid)}<div><b>${esc(c.name)}</b>${sub ? `<div class="mute">${sub}</div>` : ''}<div>★ ${c.rating}/10${c.tracks.length ? ` <span class="mute">· ${c.tracks.length} tracks</span>` : ''}</div>${th ? `<div class="mute">♪ ${esc(th.name)}</div>` : ''}</div></div>`;
 };
 const items = () => {
   const q = search.trim().toLowerCase();
@@ -83,7 +88,7 @@ function authView() {
 const listView = () => `<h2>My CDs</h2><input id="sq" type="search" placeholder="Search name, artist or song" value="${esc(search)}"><button type="button" class="btn alt" id="grp" style="margin:0 0 12px">Group by artist: ${group ? 'On' : 'Off'}</button><div id="items">${items()}</div>`;
 const topView = () => {
   const r = cds.filter(c => c.rating > 0).sort((a, b) => b.rating - a.rating || a.name.localeCompare(b.name));
-  return '<h2>Top rated</h2>' + (r.length ? r.map((c, i) => `<div class="card" data-edit="${c.id}"><span class="mute">#${i + 1}</span> <b>${esc(c.name)}</b><div class="mute">${esc(c.artist)}</div><div>★ ${c.rating}/10</div></div>`).join('') : '<p class="mute">Rate a CD to see it here.</p>');
+  return '<h2>Top rated</h2>' + (r.length ? r.map((c, i) => `<div class="card cdrow" data-edit="${c.id}">${cov(c.rgid)}<div><span class="mute">#${i + 1}</span> <b>${esc(c.name)}</b><div class="mute">${esc(c.artist)}</div><div>★ ${c.rating}/10</div></div></div>`).join('') : '<p class="mute">Rate a CD to see it here.</p>');
 };
 const formView = () => {
   const f = form;
@@ -95,6 +100,7 @@ const formView = () => {
   <label class="mute">Name</label><input id="n" value="${esc(f.name)}">
   <label class="mute">Artist</label><input id="a" value="${esc(f.artist)}">
   <label class="mute">Year (optional)</label><input id="y" inputmode="numeric" maxlength="4" value="${esc(f.year)}">
+  <div class="card cdrow">${cov(f.rgid, 96)}<div style="flex:1"><button type="button" class="btn alt" id="cover" style="margin:0">Find cover art</button><p class="mute" id="cm" style="margin:6px 0 0">${f.rgid ? 'Cover set.' : 'Uses the name and artist above.'}</p></div></div>
   <label class="mute">Rating</label><div id="st">${stars(f.rating)}</div>
   <h3>Tracks</h3>
   ${f.tracks.map((t, i) => `<div class="row" data-t="${i}"><input class="tn" placeholder="Song" value="${esc(t.name)}"><input class="tt" style="width:78px" placeholder="m:ss" inputmode="numeric" value="${esc(t.time)}"><button type="button" class="link" style="width:36px" data-rm="${i}">✕</button></div>`).join('')}
@@ -117,8 +123,9 @@ function collect() {
 }
 async function save() {
   collect();
+  if (!form.rgid) await findCover(true);
   const f = form;
-  const body = { name: f.name, artist: f.artist, year: f.year, rating: f.rating, barcode: f.barcode,
+  const body = { name: f.name, artist: f.artist, year: f.year, rating: f.rating, barcode: f.barcode, rgid: f.rgid,
     tracks: f.tracks.filter(t => t.name.trim()).map(t => ({ name: t.name.trim(), seconds: parseT(t.time) })) };
   try {
     await api(f.id ? 'cds/' + f.id : 'cds', { method: f.id ? 'PUT' : 'POST', body });
@@ -167,6 +174,19 @@ async function decodeImg(file) {
   }
   return null;
 }
+async function findCover(silent) {
+  collect();
+  const f = form, m = $('#cm');
+  if (!f.name.trim() || !f.artist.trim()) { if (!silent && m) m.textContent = 'Enter the name and artist first.'; return; }
+  if (!silent && m) m.textContent = 'Searching…';
+  try {
+    const q = 'releasegroup:"' + f.name.replace(/"/g, '') + '" AND artist:"' + f.artist.replace(/"/g, '') + '"';
+    const d = await (await fetch('https://musicbrainz.org/ws/2/release-group/?query=' + encodeURIComponent(q) + '&fmt=json&limit=1')).json();
+    const g = d['release-groups'] && d['release-groups'][0];
+    if (g && Number(g.score) >= 90) { form.rgid = g.id; if (!silent) { render(); $('#cm').textContent = 'Cover set.'; } }
+    else if (!silent && m) m.textContent = 'No match found.';
+  } catch (e) { if (!silent && m) m.textContent = 'Search failed. Try again.'; }
+}
 async function lookup(code) {
   collect();
   code = code.replace(/\D/g, '');
@@ -183,6 +203,7 @@ async function lookup(code) {
     if (!rel) { m.textContent = 'Not found. Fill it in by hand.'; return; }
     const r = await (await fetch('https://musicbrainz.org/ws/2/release/' + rel.id + '?inc=recordings+artist-credits&fmt=json')).json();
     form.barcode = code; form.name = r.title;
+    form.rgid = (rel['release-group'] && rel['release-group'].id) || '';
     form.artist = (r['artist-credit'] || []).map(a => a.name + (a.joinphrase || '')).join('');
     form.year = (r.date || '').slice(0, 4);
     form.tracks = (r.media || []).flatMap(md => md.tracks || []).map(t => ({ name: t.title, time: fmt(t.length ? Math.round(t.length / 1000) : null) }));
@@ -201,7 +222,7 @@ document.addEventListener('click', async e => {
   }
   if (d.edit) {
     const c = cds.find(x => x.id == d.edit);
-    form = { id: c.id, name: c.name, artist: c.artist, year: c.year || '', rating: c.rating, barcode: c.barcode || '', tracks: c.tracks.map(k => ({ name: k.name, time: fmt(k.seconds) })) };
+    form = { id: c.id, name: c.name, artist: c.artist, year: c.year || '', rating: c.rating, barcode: c.barcode || '', rgid: c.rgid || '', tracks: c.tracks.map(k => ({ name: k.name, time: fmt(k.seconds) })) };
     view = 'form'; return render();
   }
   if (d.star) { form.rating = form.rating == d.star ? 0 : +d.star; $('#st').innerHTML = stars(form.rating); return; }
@@ -211,6 +232,7 @@ document.addEventListener('click', async e => {
   if (t.id === 'addt') { collect(); form.tracks.push({ name: '', time: '' }); return render(); }
   if (t.id === 'save') return save();
   if (t.id === 'del') { if (confirm('Delete this CD?')) { await api('cds/' + form.id, { method: 'DELETE' }); await load(); view = 'list'; render(); } return; }
+  if (t.id === 'cover') return findCover(false);
   if (t.id === 'scan') return $('#pic').click();
   if (t.id === 'look') return lookup($('#bc').value);
 });

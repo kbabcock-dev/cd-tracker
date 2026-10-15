@@ -41,6 +41,7 @@ function clean(b) {
     year: y >= 1900 && y <= 2100 ? y : null,
     rating: Math.max(0, Math.min(10, parseInt(b.rating, 10) || 0)),
     barcode: String(b.barcode || '').replace(/\D/g, '').slice(0, 20),
+    rgid: /^[0-9a-f-]{36}$/i.test(String(b.rgid || '')) ? String(b.rgid) : '',
     tracks: JSON.stringify(tracks),
   };
 }
@@ -84,15 +85,15 @@ async function handle(request, env) {
 
     if (a === 'cds') {
       if (m === 'GET' && !id) {
-        const rows = await sql`SELECT id, name, artist, year, rating, barcode, tracks FROM cds
+        const rows = await sql`SELECT id, name, artist, year, rating, barcode, rgid, tracks FROM cds
           WHERE user_id = ${u.id} ORDER BY created_at DESC`;
         return json({ cds: rows });
       }
       if (m === 'POST' && !id) {
         const c = clean(body);
         if (!c) return json({ error: 'Name and artist are required' }, 400);
-        const r = await sql`INSERT INTO cds(user_id, name, artist, year, rating, barcode, tracks)
-          VALUES(${u.id}, ${c.name}, ${c.artist}, ${c.year}, ${c.rating}, ${c.barcode}, ${c.tracks}::jsonb)
+        const r = await sql`INSERT INTO cds(user_id, name, artist, year, rating, barcode, rgid, tracks)
+          VALUES(${u.id}, ${c.name}, ${c.artist}, ${c.year}, ${c.rating}, ${c.barcode}, ${c.rgid}, ${c.tracks}::jsonb)
           RETURNING id`;
         return json({ id: r[0].id });
       }
@@ -100,7 +101,7 @@ async function handle(request, env) {
         const c = clean(body);
         if (!c) return json({ error: 'Name and artist are required' }, 400);
         const r = await sql`UPDATE cds SET name = ${c.name}, artist = ${c.artist}, year = ${c.year},
-          rating = ${c.rating}, barcode = ${c.barcode}, tracks = ${c.tracks}::jsonb
+          rating = ${c.rating}, barcode = ${c.barcode}, rgid = ${c.rgid}, tracks = ${c.tracks}::jsonb
           WHERE id = ${+id} AND user_id = ${u.id} RETURNING id`;
         return r[0] ? json({ ok: true }) : json({ error: 'Not found' }, 404);
       }

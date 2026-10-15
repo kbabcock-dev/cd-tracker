@@ -21,7 +21,11 @@ CREATE TABLE cds (
   year INT,
   rating INT NOT NULL DEFAULT 0 CHECK (rating BETWEEN 0 AND 10),
   barcode TEXT NOT NULL DEFAULT '',
+  rgid TEXT NOT NULL DEFAULT '',
   tracks JSONB NOT NULL DEFAULT '[]',
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX cds_user_idx ON cds (user_id);
+
+-- Existing database? Run this once instead of recreating the table:
+-- ALTER TABLE cds ADD COLUMN IF NOT EXISTS rgid TEXT NOT NULL DEFAULT '';
