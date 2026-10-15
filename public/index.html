@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="CD Tracker">
+<meta name="theme-color" content="#0b0b14">
+<title>CD Tracker</title>
+<style>
+:root{--bg:#0b0b14;--card:#161626;--ink:#f1f0ff;--mute:#8e8ca8;--line:#2a2a44;--acc:#22d3ee;--acc2:#e879f9;color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.4 -apple-system,system-ui,sans-serif;padding:env(safe-area-inset-top) 0 calc(76px + env(safe-area-inset-bottom))}
+main{max-width:560px;margin:0 auto;padding:16px}
+h2{margin:4px 0 14px}
+input,button{font:inherit}
+input{width:100%;padding:12px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--ink);margin:4px 0 10px}
+.btn{display:block;width:100%;background:var(--acc);color:#04222a;border:0;border-radius:10px;padding:13px;font-weight:700;margin-top:6px}
+.btn.alt{background:none;color:var(--ink);border:1px solid var(--line)}
+.btn.del{background:none;color:#fb7185;border:1px solid #fb7185}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:10px}
+.stars button{background:none;border:0;font-size:25px;padding:0 1px;color:var(--line)}
+.stars .on{color:var(--acc2)}
+nav{position:fixed;left:0;right:0;bottom:0;display:flex;background:#10101c;border-top:1px solid var(--line);padding:6px 8px calc(6px + env(safe-area-inset-bottom))}
+nav button{flex:1;background:none;border:0;color:var(--mute);padding:10px 0}
+nav .on{color:var(--acc);font-weight:700}
+.row{display:flex;gap:8px;align-items:center}
+.row>*{min-width:0}
+.mute{color:var(--mute);font-size:.9rem}
+.err{color:#fb7185}
+.link{background:none;border:0;color:var(--acc);padding:10px 0;width:100%}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<nav id="nav"></nav>
+<script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js"></script>
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const api = async (p, o = {}) => {
+  const r = await fetch('/api/' + p, { method: o.method || 'GET', headers: { 'content-type': 'application/json' }, body: o.body && JSON.stringify(o.body) });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.error || 'Something went wrong');
+  return d;
+};
+const fmt = s => s == null ? '' : Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+const parseT = t => { t = t.trim(); const m = /^(\d+):(\d{1,2})$/.exec(t); return m ? +m[1] * 60 + +m[2] : /^\d+$/.test(t) ? +t : null; };
+const blank = () => ({ id: null, name: '', artist: '', year: '', rating: 0, barcode: '', tracks: [] });
+let me = null, cds = [], view = 'list', form = blank(), search = '', mode = 'login', authErr = '';
+
+const stars = n => '<span class="stars">' + [...Array(10)].map((_, i) => `<button type="button" data-star="${i + 1}" class="${i < n ? 'on' : ''}">★</button>`).join('') + '</span>';
+const card = c => `<div class="card" data-edit="${c.id}"><b>${esc(c.name)}</b><div class="mute">${esc(c.artist)}${c.year ? ' · ' + c.year : ''}</div><div>★ ${c.rating}/10${c.tracks.length ? ` <span class="mute">· ${c.tracks.length} tracks</span>` : ''}</div></div>`;
+const items = () => {
+  const q = search.toLowerCase();
+  const r = cds.filter(c => (c.name + ' ' + c.artist).toLowerCase().includes(q));
+  return r.length ? r.map(card).join('') : '<p class="mute">No CDs found.</p>';
+};
+
+function authView() {
+  const su = mode === 'signup';
+  return `<main><h2>💿 CD Tracker</h2><form id="auth" class="card">
+    <label class="mute">Username</label><input id="u" autocapitalize="none" autocomplete="username" required>
+    <label class="mute">Password</label><input id="p" type="password" autocomplete="${su ? 'new-password' : 'current-password'}" required>
+    <p class="err">${esc(authErr)}</p>
+    <button class="btn">${su ? 'Create account' : 'Log in'}</button>
+    <button type="button" class="link" id="tog">${su ? 'Have an account? Log in' : 'New here? Sign up'}</button></form></main>`;
+}
+const listView = () => `<h2>My CDs</h2><input id="sq" type="search" placeholder="Search name or artist" value="${esc(search)}"><div id="items">${items()}</div>`;
+const topView = () => {
+  const r = cds.filter(c => c.rating > 0).sort((a, b) => b.rating - a.rating || a.name.localeCompare(b.name));
+  return '<h2>Top rated</h2>' + (r.length ? r.map((c, i) => `<div class="card" data-edit="${c.id}"><span class="mute">#${i + 1}</span> <b>${esc(c.name)}</b><div class="mute">${esc(c.artist)}</div><div>★ ${c.rating}/10</div></div>`).join('') : '<p class="mute">Rate a CD to see it here.</p>');
+};
+const formView = () => {
+  const f = form;
+  return `<h2>${f.id ? 'Edit CD' : 'Add CD'}</h2>
+  <div class="card"><label class="mute">Barcode</label>
+    <div class="row"><input id="bc" inputmode="numeric" value="${esc(f.barcode)}" placeholder="Type number or scan"><button type="button" class="btn alt" id="look" style="width:auto;margin:0 0 6px">Look up</button></div>
+    <input type="file" id="pic" accept="image/*" capture="environment" hidden>
+    <button type="button" class="btn alt" id="scan">📷 Scan barcode photo</button><p class="mute" id="lm"></p></div>
+  <label class="mute">Name</label><input id="n" value="${esc(f.name)}">
+  <label class="mute">Artist</label><input id="a" value="${esc(f.artist)}">
+  <label class="mute">Year (optional)</label><input id="y" inputmode="numeric" maxlength="4" value="${esc(f.year)}">
+  <label class="mute">Rating</label><div id="st">${stars(f.rating)}</div>
+  <h3>Tracks</h3>
+  ${f.tracks.map((t, i) => `<div class="row" data-t="${i}"><input class="tn" placeholder="Song" value="${esc(t.name)}"><input class="tt" style="width:78px" placeholder="m:ss" inputmode="numeric" value="${esc(t.time)}"><button type="button" class="link" style="width:36px" data-rm="${i}">✕</button></div>`).join('')}
+  <button type="button" class="btn alt" id="addt">+ Add track</button>
+  <p class="err" id="msg"></p>
+  <button type="button" class="btn" id="save">Save</button>
+  ${f.id ? '<button type="button" class="btn del" id="del">Delete CD</button>' : ''}`;
+};
+function render() {
+  const nav = $('#nav'), app = $('#app');
+  if (!me) { nav.innerHTML = ''; app.innerHTML = authView(); return; }
+  nav.innerHTML = [['list', 'List'], ['form', 'Add'], ['top', 'Ratings']].map(([k, l]) => `<button data-nav="${k}" class="${view === k ? 'on' : ''}">${l}</button>`).join('') + '<button data-nav="out">Log out</button>';
+  app.innerHTML = '<main>' + (view === 'list' ? listView() : view === 'top' ? topView() : formView()) + '</main>';
+}
+const load = async () => { cds = (await api('cds')).cds; };
+function collect() {
+  const f = form;
+  f.barcode = $('#bc').value; f.name = $('#n').value; f.artist = $('#a').value; f.year = $('#y').value;
+  f.tracks = [...document.querySelectorAll('[data-t]')].map(r => ({ name: r.querySelector('.tn').value, time: r.querySelector('.tt').value }));
+}
+async function save() {
+  collect();
+  const f = form;
+  const body = { name: f.name, artist: f.artist, year: f.year, rating: f.rating, barcode: f.barcode,
+    tracks: f.tracks.filter(t => t.name.trim()).map(t => ({ name: t.name.trim(), seconds: parseT(t.time) })) };
+  try {
+    await api(f.id ? 'cds/' + f.id : 'cds', { method: f.id ? 'PUT' : 'POST', body });
+    await load(); view = 'list'; render();
+  } catch (x) { $('#msg').textContent = x.message; }
+}
+
+async function decodeImg(file) {
+  if ('BarcodeDetector' in window) {
+    try {
+      const det = new BarcodeDetector({ formats: ['ean_13', 'upc_a', 'ean_8', 'upc_e'] });
+      const hits = await det.detect(await createImageBitmap(file));
+      if (hits.length) return hits[0].rawValue;
+    } catch (e) {}
+  }
+  if (window.ZXing) {
+    const url = URL.createObjectURL(file);
+    try {
+      const hints = new Map();
+      hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+      hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [ZXing.BarcodeFormat.EAN_13, ZXing.BarcodeFormat.UPC_A, ZXing.BarcodeFormat.EAN_8, ZXing.BarcodeFormat.UPC_E]);
+      return (await new ZXing.BrowserMultiFormatReader(hints).decodeFromImageUrl(url)).getText();
+    } catch (e) {}
+  }
+  return null;
+}
+async function lookup(code) {
+  collect();
+  code = code.replace(/\D/g, '');
+  const m = $('#lm');
+  if (code.length < 8) { m.textContent = 'Enter the full barcode number.'; return; }
+  m.textContent = 'Looking up…';
+  try {
+    const tries = [code]; if (code.length === 12) tries.push('0' + code); if (code.length === 13 && code[0] === '0') tries.push(code.slice(1));
+    let rel = null;
+    for (const c of tries) {
+      const d = await (await fetch('https://musicbrainz.org/ws/2/release/?query=barcode:' + c + '&fmt=json&limit=1')).json();
+      if (d.releases && d.releases[0]) { rel = d.releases[0]; break; }
+    }
+    if (!rel) { m.textContent = 'Not found. Fill it in by hand.'; return; }
+    const r = await (await fetch('https://musicbrainz.org/ws/2/release/' + rel.id + '?inc=recordings+artist-credits&fmt=json')).json();
+    form.barcode = code; form.name = r.title;
+    form.artist = (r['artist-credit'] || []).map(a => a.name + (a.joinphrase || '')).join('');
+    form.year = (r.date || '').slice(0, 4);
+    form.tracks = (r.media || []).flatMap(md => md.tracks || []).map(t => ({ name: t.title, time: fmt(t.length ? Math.round(t.length / 1000) : null) }));
+    render(); $('#lm').textContent = 'Filled in from MusicBrainz. Check it, then save.';
+  } catch (e) { m.textContent = 'Lookup failed. Try again in a moment.'; }
+}
+
+document.addEventListener('click', async e => {
+  const t = e.target.closest('button,[data-edit]');
+  if (!t) return;
+  const d = t.dataset;
+  if (d.nav) {
+    if (d.nav === 'out') { await api('logout', { method: 'POST' }); me = null; cds = []; return render(); }
+    if (d.nav === 'form') form = blank();
+    view = d.nav; return render();
+  }
+  if (d.edit) {
+    const c = cds.find(x => x.id == d.edit);
+    form = { id: c.id, name: c.name, artist: c.artist, year: c.year || '', rating: c.rating, barcode: c.barcode || '', tracks: c.tracks.map(k => ({ name: k.name, time: fmt(k.seconds) })) };
+    view = 'form'; return render();
+  }
+  if (d.star) { form.rating = form.rating == d.star ? 0 : +d.star; $('#st').innerHTML = stars(form.rating); return; }
+  if (d.rm !== undefined) { collect(); form.tracks.splice(+d.rm, 1); return render(); }
+  if (t.id === 'tog') { mode = mode === 'login' ? 'signup' : 'login'; authErr = ''; return render(); }
+  if (t.id === 'addt') { collect(); form.tracks.push({ name: '', time: '' }); return render(); }
+  if (t.id === 'save') return save();
+  if (t.id === 'del') { if (confirm('Delete this CD?')) { await api('cds/' + form.id, { method: 'DELETE' }); await load(); view = 'list'; render(); } return; }
+  if (t.id === 'scan') return $('#pic').click();
+  if (t.id === 'look') return lookup($('#bc').value);
+});
+document.addEventListener('submit', async e => {
+  e.preventDefault();
+  if (e.target.id !== 'auth') return;
+  try { me = await api(mode, { method: 'POST', body: { username: $('#u').value, password: $('#p').value } }); await load(); view = 'list'; authErr = ''; }
+  catch (x) { authErr = x.message; }
+  render();
+});
+document.addEventListener('input', e => { if (e.target.id === 'sq') { search = e.target.value; $('#items').innerHTML = items(); } });
+document.addEventListener('change', async e => {
+  if (e.target.id !== 'pic' || !e.target.files[0]) return;
+  collect(); $('#lm').textContent = 'Reading barcode…';
+  const code = await decodeImg(e.target.files[0]);
+  if (!code) { $('#lm').textContent = "Couldn't read a barcode. Try a closer, sharper shot or type the number."; return; }
+  $('#bc').value = code; lookup(code);
+});
+(async () => { try { me = await api('me'); await load(); } catch (e) { me = null; } render(); })();
+</script>
+</body>
+</html>
