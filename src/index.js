@@ -47,6 +47,7 @@ function clean(b) {
 
 async function handle(request, env) {
   const path = new URL(request.url).pathname.split('/').filter(Boolean).slice(1);
+  if (path[0] === 'health') return json({ hasDatabaseUrl: !!env.DATABASE_URL, bindingNames: Object.keys(env) });
   if (!env.DATABASE_URL) return json({ error: 'Server is missing DATABASE_URL' }, 500);
   const [a, id] = path;
   const m = request.method;
