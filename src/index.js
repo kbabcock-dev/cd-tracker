@@ -45,9 +45,10 @@ function clean(b) {
   };
 }
 
-export async function onRequest({ request, env, params }) {
+async function handle(request, env) {
+  const path = new URL(request.url).pathname.split('/').filter(Boolean).slice(1);
   if (!env.DATABASE_URL) return json({ error: 'Server is missing DATABASE_URL' }, 500);
-  const [a, id] = params.path;
+  const [a, id] = path;
   const m = request.method;
   const body = m === 'POST' || m === 'PUT' ? await request.json().catch(() => ({})) : {};
   try {
@@ -116,3 +117,5 @@ export async function onRequest({ request, env, params }) {
     return json({ error: 'Server error' }, 500);
   }
 }
+
+export default { fetch: handle };
