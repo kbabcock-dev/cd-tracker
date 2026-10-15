@@ -50,11 +50,23 @@ const blank = () => ({ id: null, name: '', artist: '', year: '', rating: 0, barc
 let me = null, cds = [], view = 'list', form = blank(), search = '', mode = 'login', authErr = '';
 
 const stars = n => '<span class="stars">' + [...Array(10)].map((_, i) => `<button type="button" data-star="${i + 1}" class="${i < n ? 'on' : ''}">★</button>`).join('') + '</span>';
-const card = c => `<div class="card" data-edit="${c.id}"><b>${esc(c.name)}</b><div class="mute">${esc(c.artist)}${c.year ? ' · ' + c.year : ''}</div><div>★ ${c.rating}/10${c.tracks.length ? ` <span class="mute">· ${c.tracks.length} tracks</span>` : ''}</div></div>`;
+let group = false;
+try { group = localStorage.getItem('grp') === '1'; } catch (e) {}
+const card = (c, q = '', showArtist = true) => {
+  const th = q && !(c.name + ' ' + c.artist).toLowerCase().includes(q) ? c.tracks.find(t => t.name.toLowerCase().includes(q)) : null;
+  const sub = (showArtist ? esc(c.artist) : '') + (c.year ? (showArtist ? ' · ' : '') + c.year : '');
+  return `<div class="card" data-edit="${c.id}"><b>${esc(c.name)}</b>${sub ? `<div class="mute">${sub}</div>` : ''}<div>★ ${c.rating}/10${c.tracks.length ? ` <span class="mute">· ${c.tracks.length} tracks</span>` : ''}</div>${th ? `<div class="mute">♪ ${esc(th.name)}</div>` : ''}</div>`;
+};
 const items = () => {
-  const q = search.toLowerCase();
-  const r = cds.filter(c => (c.name + ' ' + c.artist).toLowerCase().includes(q));
-  return r.length ? r.map(card).join('') : '<p class="mute">No CDs found.</p>';
+  const q = search.trim().toLowerCase();
+  const r = cds.filter(c => !q || (c.name + ' ' + c.artist).toLowerCase().includes(q) || c.tracks.some(t => t.name.toLowerCase().includes(q)));
+  if (!r.length) return '<p class="mute">No CDs found.</p>';
+  if (!group) return r.map(c => card(c, q, true)).join('');
+  const g = {};
+  r.forEach(c => { const k = c.artist.trim().toLowerCase(); (g[k] = g[k] || { name: c.artist.trim(), list: [] }).list.push(c); });
+  return Object.values(g).sort((x, y) => x.name.localeCompare(y.name)).map(x =>
+    `<h3 style="margin:16px 0 8px">${esc(x.name)} <span class="mute">(${x.list.length})</span></h3>` +
+    x.list.sort((m, n) => (m.year || 9999) - (n.year || 9999) || m.name.localeCompare(n.name)).map(c => card(c, q, false)).join('')).join('');
 };
 
 function authView() {
@@ -66,7 +78,7 @@ function authView() {
     <button class="btn">${su ? 'Create account' : 'Log in'}</button>
     <button type="button" class="link" id="tog">${su ? 'Have an account? Log in' : 'New here? Sign up'}</button></form></main>`;
 }
-const listView = () => `<h2>My CDs</h2><input id="sq" type="search" placeholder="Search name or artist" value="${esc(search)}"><div id="items">${items()}</div>`;
+const listView = () => `<h2>My CDs</h2><input id="sq" type="search" placeholder="Search name, artist or song" value="${esc(search)}"><button type="button" class="btn alt" id="grp" style="margin:0 0 12px">Group by artist: ${group ? 'On' : 'Off'}</button><div id="items">${items()}</div>`;
 const topView = () => {
   const r = cds.filter(c => c.rating > 0).sort((a, b) => b.rating - a.rating || a.name.localeCompare(b.name));
   return '<h2>Top rated</h2>' + (r.length ? r.map((c, i) => `<div class="card" data-edit="${c.id}"><span class="mute">#${i + 1}</span> <b>${esc(c.name)}</b><div class="mute">${esc(c.artist)}</div><div>★ ${c.rating}/10</div></div>`).join('') : '<p class="mute">Rate a CD to see it here.</p>');
@@ -77,8 +89,7 @@ const formView = () => {
   <div class="card"><label class="mute">Barcode</label>
     <div class="row"><input id="bc" inputmode="numeric" value="${esc(f.barcode)}" placeholder="Type number or scan"><button type="button" class="btn alt" id="look" style="width:auto;margin:0 0 6px">Look up</button></div>
     <input type="file" id="pic" accept="image/*" capture="environment" hidden>
-    <button type="button" class="btn alt" id="live">🎥 Scan live with camera</button>
-    <button type="button" class="btn alt" id="scan">📷 Use a photo instead</button><p class="mute" id="lm"></p></div>
+    <button type="button" class="btn alt" id="scan">📷 Scan barcode photo</button><p class="mute" id="lm"></p></div>
   <label class="mute">Name</label><input id="n" value="${esc(f.name)}">
   <label class="mute">Artist</label><input id="a" value="${esc(f.artist)}">
   <label class="mute">Year (optional)</label><input id="y" inputmode="numeric" maxlength="4" value="${esc(f.year)}">
@@ -154,25 +165,6 @@ async function decodeImg(file) {
   }
   return null;
 }
-let liveReader = null;
-function stopLive() {
-  if (liveReader) { try { liveReader.reset(); } catch (e) {} liveReader = null; }
-  const o = $('#ov'); if (o) o.remove();
-}
-async function startLive() {
-  collect();
-  const o = document.createElement('div');
-  o.id = 'ov';
-  o.style.cssText = 'position:fixed;inset:0;background:#000;z-index:10;display:flex;flex-direction:column';
-  o.innerHTML = '<video id="vid" playsinline muted style="flex:1;min-height:0;width:100%;object-fit:cover"></video><p class="mute" style="text-align:center;margin:8px">Hold the barcode steady in view</p><button class="btn alt" id="stop" style="margin:0 16px calc(16px + env(safe-area-inset-bottom));width:auto">Cancel</button>';
-  document.body.appendChild(o);
-  try {
-    liveReader = new ZXing.BrowserMultiFormatReader(hintMap());
-    await liveReader.decodeFromConstraints({ video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } } }, 'vid', res => {
-      if (res) { const c = res.getText(); stopLive(); $('#bc').value = c; lookup(c); }
-    });
-  } catch (e) { stopLive(); $('#lm').textContent = 'Camera unavailable. Allow camera access in Safari, or use the photo option.'; }
-}
 async function lookup(code) {
   collect();
   code = code.replace(/\D/g, '');
@@ -212,12 +204,11 @@ document.addEventListener('click', async e => {
   }
   if (d.star) { form.rating = form.rating == d.star ? 0 : +d.star; $('#st').innerHTML = stars(form.rating); return; }
   if (d.rm !== undefined) { collect(); form.tracks.splice(+d.rm, 1); return render(); }
+  if (t.id === 'grp') { group = !group; try { localStorage.setItem('grp', group ? '1' : '0'); } catch (e) {} return render(); }
   if (t.id === 'tog') { mode = mode === 'login' ? 'signup' : 'login'; authErr = ''; return render(); }
   if (t.id === 'addt') { collect(); form.tracks.push({ name: '', time: '' }); return render(); }
   if (t.id === 'save') return save();
   if (t.id === 'del') { if (confirm('Delete this CD?')) { await api('cds/' + form.id, { method: 'DELETE' }); await load(); view = 'list'; render(); } return; }
-  if (t.id === 'live') return startLive();
-  if (t.id === 'stop') return stopLive();
   if (t.id === 'scan') return $('#pic').click();
   if (t.id === 'look') return lookup($('#bc').value);
 });
@@ -233,7 +224,7 @@ document.addEventListener('change', async e => {
   if (e.target.id !== 'pic' || !e.target.files[0]) return;
   collect(); $('#lm').textContent = 'Reading barcode…';
   const code = await decodeImg(e.target.files[0]);
-  if (!code) { $('#lm').textContent = "Couldn't read that photo. Fill the frame with the barcode in good light, or use live scan."; return; }
+  if (!code) { $('#lm').textContent = "Couldn't read that photo. Fill the frame with the barcode in good light, or type the number."; return; }
   $('#bc').value = code; lookup(code);
 });
 (async () => { try { me = await api('me'); await load(); } catch (e) { me = null; } render(); })();
