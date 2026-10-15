@@ -77,7 +77,8 @@ const formView = () => {
   <div class="card"><label class="mute">Barcode</label>
     <div class="row"><input id="bc" inputmode="numeric" value="${esc(f.barcode)}" placeholder="Type number or scan"><button type="button" class="btn alt" id="look" style="width:auto;margin:0 0 6px">Look up</button></div>
     <input type="file" id="pic" accept="image/*" capture="environment" hidden>
-    <button type="button" class="btn alt" id="scan">📷 Scan barcode photo</button><p class="mute" id="lm"></p></div>
+    <button type="button" class="btn alt" id="live">🎥 Scan live with camera</button>
+    <button type="button" class="btn alt" id="scan">📷 Use a photo instead</button><p class="mute" id="lm"></p></div>
   <label class="mute">Name</label><input id="n" value="${esc(f.name)}">
   <label class="mute">Artist</label><input id="a" value="${esc(f.artist)}">
   <label class="mute">Year (optional)</label><input id="y" inputmode="numeric" maxlength="4" value="${esc(f.year)}">
@@ -112,6 +113,23 @@ async function save() {
   } catch (x) { $('#msg').textContent = x.message; }
 }
 
+const hintMap = () => {
+  const h = new Map();
+  h.set(ZXing.DecodeHintType.TRY_HARDER, true);
+  h.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [ZXing.BarcodeFormat.EAN_13, ZXing.BarcodeFormat.UPC_A, ZXing.BarcodeFormat.EAN_8, ZXing.BarcodeFormat.UPC_E]);
+  return h;
+};
+const loadImg = file => new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = URL.createObjectURL(file); });
+function mk(img, sc, crop, rot) {
+  const nh = img.naturalHeight, nw = img.naturalWidth;
+  const sy = crop ? nh * .25 : 0, sh = crop ? nh * .5 : nh;
+  const dw = Math.round(nw * sc), dh = Math.round(sh * sc);
+  const cv = document.createElement('canvas');
+  const ctx = cv.getContext('2d', { willReadFrequently: true });
+  if (rot) { cv.width = dh; cv.height = dw; ctx.translate(dh, 0); ctx.rotate(Math.PI / 2); } else { cv.width = dw; cv.height = dh; }
+  ctx.drawImage(img, 0, sy, nw, sh, 0, 0, dw, dh);
+  return cv;
+}
 async function decodeImg(file) {
   if ('BarcodeDetector' in window) {
     try {
@@ -120,16 +138,40 @@ async function decodeImg(file) {
       if (hits.length) return hits[0].rawValue;
     } catch (e) {}
   }
-  if (window.ZXing) {
-    const url = URL.createObjectURL(file);
-    try {
-      const hints = new Map();
-      hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
-      hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [ZXing.BarcodeFormat.EAN_13, ZXing.BarcodeFormat.UPC_A, ZXing.BarcodeFormat.EAN_8, ZXing.BarcodeFormat.UPC_E]);
-      return (await new ZXing.BrowserMultiFormatReader(hints).decodeFromImageUrl(url)).getText();
-    } catch (e) {}
+  if (!window.ZXing) return null;
+  const img = await loadImg(file);
+  const reader = new ZXing.MultiFormatReader();
+  reader.setHints(hintMap());
+  for (const w of [1200, 800, 1800, 500]) {
+    const sc = Math.min(1, w / Math.max(img.naturalWidth, img.naturalHeight));
+    for (const crop of [false, true]) for (const rot of [false, true]) {
+      try {
+        const bmp = new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(new ZXing.HTMLCanvasElementLuminanceSource(mk(img, sc, crop, rot))));
+        return reader.decode(bmp).getText();
+      } catch (e) {}
+      await new Promise(r => setTimeout(r));
+    }
   }
   return null;
+}
+let liveReader = null;
+function stopLive() {
+  if (liveReader) { try { liveReader.reset(); } catch (e) {} liveReader = null; }
+  const o = $('#ov'); if (o) o.remove();
+}
+async function startLive() {
+  collect();
+  const o = document.createElement('div');
+  o.id = 'ov';
+  o.style.cssText = 'position:fixed;inset:0;background:#000;z-index:10;display:flex;flex-direction:column';
+  o.innerHTML = '<video id="vid" playsinline muted style="flex:1;min-height:0;width:100%;object-fit:cover"></video><p class="mute" style="text-align:center;margin:8px">Hold the barcode steady in view</p><button class="btn alt" id="stop" style="margin:0 16px calc(16px + env(safe-area-inset-bottom));width:auto">Cancel</button>';
+  document.body.appendChild(o);
+  try {
+    liveReader = new ZXing.BrowserMultiFormatReader(hintMap());
+    await liveReader.decodeFromConstraints({ video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } } }, 'vid', res => {
+      if (res) { const c = res.getText(); stopLive(); $('#bc').value = c; lookup(c); }
+    });
+  } catch (e) { stopLive(); $('#lm').textContent = 'Camera unavailable. Allow camera access in Safari, or use the photo option.'; }
 }
 async function lookup(code) {
   collect();
@@ -174,6 +216,8 @@ document.addEventListener('click', async e => {
   if (t.id === 'addt') { collect(); form.tracks.push({ name: '', time: '' }); return render(); }
   if (t.id === 'save') return save();
   if (t.id === 'del') { if (confirm('Delete this CD?')) { await api('cds/' + form.id, { method: 'DELETE' }); await load(); view = 'list'; render(); } return; }
+  if (t.id === 'live') return startLive();
+  if (t.id === 'stop') return stopLive();
   if (t.id === 'scan') return $('#pic').click();
   if (t.id === 'look') return lookup($('#bc').value);
 });
@@ -189,7 +233,7 @@ document.addEventListener('change', async e => {
   if (e.target.id !== 'pic' || !e.target.files[0]) return;
   collect(); $('#lm').textContent = 'Reading barcode…';
   const code = await decodeImg(e.target.files[0]);
-  if (!code) { $('#lm').textContent = "Couldn't read a barcode. Try a closer, sharper shot or type the number."; return; }
+  if (!code) { $('#lm').textContent = "Couldn't read that photo. Fill the frame with the barcode in good light, or use live scan."; return; }
   $('#bc').value = code; lookup(code);
 });
 (async () => { try { me = await api('me'); await load(); } catch (e) { me = null; } render(); })();
