@@ -41,7 +41,7 @@ const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;
 const api = async (p, o = {}) => {
   const r = await fetch('/api/' + p, { method: o.method || 'GET', headers: { 'content-type': 'application/json' }, body: o.body && JSON.stringify(o.body) });
   const d = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(d.error || 'Something went wrong');
+  if (!r.ok) throw new Error(d.error || 'Server error (' + r.status + '). The API may not be deployed.');
   return d;
 };
 const fmt = s => s == null ? '' : Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');

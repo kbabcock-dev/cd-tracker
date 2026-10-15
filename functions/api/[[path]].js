@@ -46,11 +46,12 @@ function clean(b) {
 }
 
 export async function onRequest({ request, env, params }) {
-  const sql = neon(env.DATABASE_URL);
+  if (!env.DATABASE_URL) return json({ error: 'Server is missing DATABASE_URL' }, 500);
   const [a, id] = params.path;
   const m = request.method;
   const body = m === 'POST' || m === 'PUT' ? await request.json().catch(() => ({})) : {};
   try {
+    const sql = neon(env.DATABASE_URL);
     if (a === 'signup' && m === 'POST') {
       const un = String(body.username || '').trim(), pw = String(body.password || '');
       if (!/^[A-Za-z0-9_]{3,20}$/.test(un)) return json({ error: 'Username: 3-20 letters, numbers or _' }, 400);
@@ -108,6 +109,10 @@ export async function onRequest({ request, env, params }) {
     }
     return json({ error: 'Not found' }, 404);
   } catch (e) {
+    console.error(e);
+    const msg = String((e && e.message) || '');
+    if (/does not exist/.test(msg)) return json({ error: 'Database tables missing: run schema.sql in Neon' }, 500);
+    if (/connection string|password authentication|ENOTFOUND/i.test(msg)) return json({ error: 'Cannot connect to Neon: check DATABASE_URL' }, 500);
     return json({ error: 'Server error' }, 500);
   }
 }
